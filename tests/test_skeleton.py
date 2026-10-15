@@ -6,6 +6,7 @@ the route exists under the agreed path and verb, which stays true once the
 feature tickets fill it in.
 """
 
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -13,9 +14,11 @@ import pytest
 from sqlalchemy import inspect
 
 from app.database import engine
+from app.main import app
 
-# (http method, path, request kwargs). A declared route answers anything but
-# 404 (unknown path) or 405 (wrong method); the exact stub answer is irrelevant.
+# (http method, path, request kwargs). The route must be registered under this
+# exact path and verb; whether it answers a stub or the finished feature is
+# irrelevant, and a correct 404 for an unknown resource id is not a defect.
 ROUTE_PROBES: list[tuple[str, str, dict[str, Any]]] = [
     ("post", "/books", {"json": {}}),
     ("get", "/books", {}),
@@ -59,13 +62,19 @@ def test_invalid_query_returns_validation_error(client):
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
+def _is_registered(method: str, path: str) -> bool:
+    """Whether the app declares a route for this path template and verb."""
+    normalized = re.sub(r"/\d+", "/{id}", path)
+    operations = app.openapi().get("paths", {}).get(normalized, {})
+    return method.lower() in operations
+
+
 @pytest.mark.parametrize(("method", "path", "kwargs"), ROUTE_PROBES)
 def test_contract_route_is_wired(client, method: str, path: str, kwargs: dict[str, Any]):
     call: Callable[..., Any] = getattr(client, method)
     response = call(path, **kwargs)
-    assert response.status_code not in (404, 405), (
-        f"{method.upper()} {path} is not wired (status {response.status_code})"
-    )
+    assert _is_registered(method, path), f"{method.upper()} {path} is not wired"
+    assert response.status_code != 405, f"{method.upper()} {path} rejects its method"
 
 
 def test_startup_creates_all_tables(client):
