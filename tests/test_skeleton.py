@@ -63,7 +63,13 @@ def test_invalid_query_returns_validation_error(client):
 
 
 def _is_registered(method: str, path: str) -> bool:
-    """Whether the app declares a route for this path template and verb."""
+    """Whether the app declares a route for this path template and verb.
+
+    The probe asks the OpenAPI schema, not a live request: once a feature ticket
+    fills a by-id route in, ``GET /books/1`` (and its siblings) legitimately
+    answers 404 for an unknown id because ``tests/conftest.py`` drops the schema
+    per test — that 404 is not a wiring defect and must not fail the suite.
+    """
     normalized = re.sub(r"/\d+", "/{id}", path)
     operations = app.openapi().get("paths", {}).get(normalized, {})
     return method.lower() in operations
@@ -71,9 +77,11 @@ def _is_registered(method: str, path: str) -> bool:
 
 @pytest.mark.parametrize(("method", "path", "kwargs"), ROUTE_PROBES)
 def test_contract_route_is_wired(client, method: str, path: str, kwargs: dict[str, Any]):
+    assert _is_registered(method, path), f"{method.upper()} {path} is not wired"
     call: Callable[..., Any] = getattr(client, method)
     response = call(path, **kwargs)
-    assert _is_registered(method, path), f"{method.upper()} {path} is not wired"
+    # A registered route must not answer 405 (method not allowed). A 404 from a
+    # by-id route for an unknown id is acceptable and deliberately not rejected.
     assert response.status_code != 405, f"{method.upper()} {path} rejects its method"
 
 
